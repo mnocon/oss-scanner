@@ -1,12 +1,17 @@
 # Ibexa DXP Open Source: the ibexa/core package.
 #
-# /src           the ibexa/core git checkout (the repository named in project.yaml), with its own dev dependencies so
-#                its unit and SQLite integration tests run offline (`composer unit`, `composer integration`).
-# /opt/ibexa     an Ibexa DXP Open Source 6.0 site, built the way Ibexa's own CI builds one
-#                (https://github.com/ibexa/ci-scripts, bin/6.0.x-dev/prepare_project_edition.sh):
-#                `composer create-project ibexa/website-skeleton`, `composer require ibexa/oss`, the Flex recipes,
-#                then `bin/console ibexa:install`. ibexa/core is installed from /src as a symlinked path repository,
-#                so the site runs the checkout and a patch to /src takes effect on the site straight away.
+# /src           the ibexa/core git checkout (the repository named in project.yaml, on its default branch: the latest
+#                development version), with its own dev dependencies so its unit and SQLite integration tests run
+#                offline (`composer unit`, `composer integration`).
+# /opt/ibexa     an Ibexa DXP Open Source site on the same development version, installed with Ibexa's manual
+#                procedure for development branches (the same one Ibexa's CI uses): `composer create-project
+#                ibexa/website-skeleton`, `composer require ibexa/oss`, the Flex recipes, `post-update-cmd`, then
+#                `bin/console ibexa:install`. ibexa/core is installed from /src as a symlinked path repository, so the
+#                site runs the checkout and a patch to /src takes effect on the site straight away.
+#
+# Nothing here names a version. The version to install (for example 6.0.x-dev) is read from the checkout's branch
+# alias, so the build follows the repository's default branch to the next version on its own. Only the PHP base
+# image below may need raising when a new version requires a newer PHP.
 #
 # The site runs in the prod environment, served by Apache with the front controller in /opt/ibexa/public, on MariaDB.
 # Start both with `ibexa-start`; the site listens on http://127.0.0.1/ and the back office on http://127.0.0.1/admin.
@@ -16,13 +21,11 @@
 FROM php:8.5-apache-trixie
 
 ARG IBEXA_PACKAGE=ibexa/core
-ARG IBEXA_VERSION=6.0.x-dev
 
 ENV DEBIAN_FRONTEND=noninteractive \
     COMPOSER_ALLOW_SUPERUSER=1 \
     COMPOSER_NO_INTERACTION=1 \
-    COMPOSER_MEMORY_LIMIT=-1 \
-    COMPOSER_ROOT_VERSION=6.0.x-dev
+    COMPOSER_MEMORY_LIMIT=-1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates git unzip curl procps jq mariadb-server mariadb-client \
@@ -116,21 +119,29 @@ RUN printf '%s\n' '#!/bin/sh' 'set -e' \
 COPY . /src
 WORKDIR /src
 
-# The package's own dev dependencies (PHPUnit, ibexa/test-core), so its tests run offline.
-RUN composer install --no-progress
+# The development version of the checkout, from its branch alias (for example 6.0.x-dev), as Ibexa's CI reads it.
+RUN jq -r '.extra["branch-alias"] | flatten | .[0]' /src/composer.json > /etc/ibexa-version \
+    && grep -Eq '^[0-9]+\.[0-9]+\.x-dev$' /etc/ibexa-version \
+    && echo "Ibexa version: $(cat /etc/ibexa-version)"
 
-# Build the site the way Ibexa's CI does for a 6.0 development build. The skeleton points Symfony Flex at Ibexa's
-# development recipes through the GitHub API, which allows 60 anonymous requests an hour; read the same index from
-# raw.githubusercontent.com instead (the recipes themselves are already fetched from there).
-RUN composer create-project --no-install --no-progress ibexa/website-skeleton:${IBEXA_VERSION} /opt/ibexa
+# The package's own dev dependencies (PHPUnit, ibexa/test-core), so its tests run offline.
+RUN COMPOSER_ROOT_VERSION="$(cat /etc/ibexa-version)" composer install --no-progress
+
+# Build the site with Ibexa's manual installation procedure for development branches. The skeleton points Symfony
+# Flex at Ibexa's development recipes through the GitHub API, which allows 60 anonymous requests an hour; read the same
+# index from raw.githubusercontent.com instead (the recipes themselves are already fetched from there).
+RUN composer create-project --no-install --no-progress "ibexa/website-skeleton:$(cat /etc/ibexa-version)" /opt/ibexa
 WORKDIR /opt/ibexa
-RUN composer config extra.symfony.endpoint https://raw.githubusercontent.com/ibexa/recipes-dev/flex/main/index.json \
-    && composer config repositories.src "{\"type\": \"path\", \"url\": \"/src\", \"options\": {\"symlink\": true, \"versions\": {\"${IBEXA_PACKAGE}\": \"${IBEXA_VERSION}\"}}}" \
-    && composer require --no-update "${IBEXA_PACKAGE}:${IBEXA_VERSION}" \
-    && composer require -W --no-scripts --no-progress "ibexa/oss:${IBEXA_VERSION}" \
-    && git config --global --add safe.directory /opt/ibexa && git init -q && git add . \
+RUN version="$(cat /etc/ibexa-version)" \
+    && composer config extra.symfony.endpoint https://raw.githubusercontent.com/ibexa/recipes-dev/flex/main/index.json \
+    && composer config repositories.src "{\"type\": \"path\", \"url\": \"/src\", \"options\": {\"symlink\": true, \"versions\": {\"${IBEXA_PACKAGE}\": \"${version}\"}}}" \
+    && composer require --no-update "${IBEXA_PACKAGE}:${version}" \
+    && composer require -W --no-scripts --no-progress "ibexa/oss:${version}" \
+    && git config --global --add safe.directory /opt/ibexa \
+    && git init -q && git add . && git -c user.name=oss-scanner -c user.email=oss-scanner@localhost commit -qm "Installed Ibexa DXP" \
     && composer recipes:install ibexa/oss --force --reset \
-    && composer recipes:install "${IBEXA_PACKAGE}" --force --reset
+    && composer recipes:install "${IBEXA_PACKAGE}" --force --reset \
+    && NODE_OPTIONS='--max-old-space-size=3072' composer run-script post-update-cmd
 
 # The site's configuration: prod environment, MariaDB, the Legacy search engine (the default, no Solr). It goes in
 # .env.local, not the image's environment, so it doesn't override the SQLite settings of the /src test suites.
@@ -192,14 +203,14 @@ final class CreateTestUsersCommand extends Command
 }
 PHP
 
-# Install the database and the assets, then create the test users. MariaDB is stopped again at the end of the step.
+# Install the clean data, then create the test users. MariaDB is stopped again at the end of the step.
 RUN ibexa-start \
     && mariadb -e "CREATE DATABASE ibexa CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_520_ci; \
          CREATE USER 'ibexa'@'%' IDENTIFIED BY 'ibexa'; GRANT ALL ON ibexa.* TO 'ibexa'@'%';" \
     && apachectl stop \
     && php bin/console ibexa:install --no-interaction \
     && php bin/console ibexa:graphql:generate-schema \
-    && NODE_OPTIONS='--max-old-space-size=3072' composer run-script post-install-cmd \
+    && php bin/console cache:clear \
     && php bin/console oss-scanner:create-test-users \
     && chown -R www-data:www-data /opt/ibexa/var /opt/ibexa/public /opt/ibexa/config/graphql \
     && ibexa-stop

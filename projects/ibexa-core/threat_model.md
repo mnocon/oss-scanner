@@ -17,8 +17,8 @@ other users later see (content names, field values, URLs, image alternative text
 
 | Path | What it is |
 | --- | --- |
-| `/src` | The `ibexa/core` git checkout (the `6.0` branch, where development of the next release happens). Patches belong here. |
-| `/opt/ibexa` | A working Ibexa DXP Open Source 6.0 site, built the way Ibexa's CI builds one, in the `prod` environment, served by Apache, on MariaDB, with the Legacy search engine. |
+| `/src` | The `ibexa/core` git checkout on its default branch, where development of the next release happens (`6.0` at the time of enrolment; `/etc/ibexa-version` holds the version, for example `6.0.x-dev`). Patches belong here. |
+| `/opt/ibexa` | A working Ibexa DXP Open Source site on the same development version, installed with Ibexa's procedure for development branches, in the `prod` environment, served by Apache, on MariaDB, with the Legacy search engine. |
 | `/opt/ibexa/vendor/ibexa/core` | A symlink to `/src`. The site runs the checkout itself, so a patch to `/src` takes effect on the site straight away (clear the cache with `ibexa-console cache:clear` after changing configuration or service definitions). |
 | `/opt/ibexa/vendor/ibexa/*` | The other Ibexa Open Source packages (`admin-ui`, `rest`, `graphql`, `user`, `fieldtype-richtext`, `http-cache`, ...). They make the site realistic but are **out of scope** for this enrolment: report only issues whose root cause is in `ibexa/core` code. |
 
