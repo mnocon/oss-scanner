@@ -1,0 +1,5 @@
+repo: https://github.com/ibexa/core#6.0
+primary_contact: security@ibexa.co
+homepage: https://www.ibexa.co
+disabled: false
+# Dockerfile and threat model live next to this file.
